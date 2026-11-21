@@ -31,6 +31,44 @@
         return column.kind === "category" ? "文字" : "数值";
     }
 
+    function setupTitle(defaultTitle, defaultTabTitle) {
+        const heading = byId("app-title");
+        const dialog = byId("title-dialog");
+        const input = byId("title-input");
+        const storageKey = `ultra-log-analysis:title:${location.pathname}`;
+        let custom = "";
+        try {
+            custom = localStorage.getItem(storageKey) ?? "";
+        } catch {
+            // Some browsers block storage for local HTML reports.
+        }
+
+        function render() {
+            heading.textContent = custom || defaultTitle;
+            document.title = custom || defaultTabTitle;
+        }
+
+        byId("title-edit").addEventListener("click", () => {
+            input.value = custom || defaultTitle;
+            dialog.showModal();
+            input.select();
+        });
+        byId("title-cancel").addEventListener("click", () => dialog.close());
+        byId("title-form").addEventListener("submit", event => {
+            event.preventDefault();
+            custom = input.value.trim();
+            try {
+                if (custom) localStorage.setItem(storageKey, custom);
+                else localStorage.removeItem(storageKey);
+            } catch {
+                // The title still applies to the open page.
+            }
+            render();
+            dialog.close();
+        });
+        render();
+    }
+
     function sourceCellWidth(value) {
         const text = String(value ?? "");
         if (/^[\x20-\x7e]*$/.test(text)) return text.length;
@@ -373,7 +411,7 @@
         const columnList = byId("column-list");
         const emptyChart = byId("chart-empty");
         const tooltip = byId("chart-tooltip");
-        const markersPanel = byId("markers-panel");
+        const markersEmpty = byId("markers-empty");
         const markersList = byId("markers-list");
         const markerNotes = new Map();
 
@@ -382,11 +420,9 @@
         byId("folder-name").textContent = folderName;
         if (byId("folder-path")) byId("folder-path").textContent = data.folder;
         byId("analyzer-name").textContent = data.analyzer;
-        byId("app-title").textContent = data.title;
-        document.title = `${data.analyzer} · ${folderName}`;
+        setupTitle(data.title, `${data.analyzer} · ${folderName}`);
         byId("file-count").textContent = integerFormat.format(data.files.length);
         byId("row-count").textContent = integerFormat.format(rows.length);
-        byId("column-count").textContent = integerFormat.format(columns.length);
         const timeRange = byId("time-range");
         if (rows.length) {
             const start = labelTime(rows[0].time);
@@ -527,7 +563,7 @@
         }
 
         function syncMarkers() {
-            markersPanel.hidden = !markerNotes.size;
+            markersEmpty.hidden = markerNotes.size > 0;
             chart.setMarkers([...markerNotes.keys()]);
         }
 

@@ -11,9 +11,14 @@
     <div class="header-content">
       <div class="identity">
         <span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i></span>
-        <div>
+        <div class="identity-content">
           <p id="analyzer-name" class="log-type">charge-log</p>
-          <h1 id="app-title">充电日志分析</h1>
+          <div class="title-line">
+            <h1 id="app-title">充电日志分析</h1>
+            <button id="title-edit" class="title-edit" type="button" aria-label="编辑标题" aria-haspopup="dialog" aria-controls="title-dialog" title="编辑标题">
+              <span class="title-edit-icon" aria-hidden="true"></span>
+            </button>
+          </div>
         </div>
       </div>
       <div class="source-folder">
@@ -38,10 +43,6 @@
       <div class="summary-item">
         <span class="summary-label">数据记录</span>
         <strong id="row-count" class="summary-value">—</strong>
-      </div>
-      <div class="summary-item">
-        <span class="summary-label">可选列</span>
-        <strong id="column-count" class="summary-value">—</strong>
       </div>
       <div class="summary-item summary-item-range">
         <span class="summary-label">时间范围</span>
@@ -99,8 +100,9 @@
         </div>
       </section>
 
-      <section id="markers-panel" class="surface markers-panel" aria-labelledby="markers-title" hidden>
+      <section id="markers-panel" class="surface markers-panel" aria-labelledby="markers-title">
         <h2 id="markers-title">时间标记</h2>
+        <p id="markers-empty" class="markers-empty">双击趋势图中的虚线添加标记。</p>
         <ul id="markers-list" class="markers-list"></ul>
       </section>
     </div>
@@ -116,6 +118,19 @@
       </details>
     </div>
   </main>
+
+  <dialog id="title-dialog" class="title-dialog" aria-labelledby="title-dialog-heading">
+    <form id="title-form" method="dialog">
+      <h2 id="title-dialog-heading">编辑报告标题</h2>
+      <label for="title-input">标题</label>
+      <input id="title-input" class="title-input" type="text" maxlength="100" autocomplete="off" aria-describedby="title-help" autofocus>
+      <p id="title-help" class="title-help">留空恢复默认标题。</p>
+      <div class="title-dialog-actions">
+        <button id="title-cancel" class="button" type="button">取消</button>
+        <button id="title-save" class="button button-primary" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
 
   <script type="application/json" id="log-data">__LOG_DATA__</script>
   <!--__SOURCE_CHUNKS__-->
