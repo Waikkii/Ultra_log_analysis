@@ -1,0 +1,5 @@
+{
+  "default_columns": ["uiSOC", "vbat_v", "ibat_ma", "charger_mode"],
+  "shared_axes": {},
+  "expected_interval_seconds": null
+}

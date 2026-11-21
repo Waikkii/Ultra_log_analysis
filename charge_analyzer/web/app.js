@@ -5,8 +5,8 @@
     const numberFormat = new Intl.NumberFormat("zh-CN", {maximumSignificantDigits: 10});
     const integerFormat = new Intl.NumberFormat("zh-CN");
     const seriesColors = [
-        "#147d83", "#5c61c9", "#c66c23", "#a23d73", "#3769bd",
-        "#3c8434", "#bd4540", "#77602c", "#1681ad", "#8459a2",
+        "#147d83", "#5c61c9", "#a8721b", "#356940", "#3769bd",
+        "#71842e", "#72509e", "#77602c", "#1681ad", "#525b70",
     ];
 
     function element(tag, className, value) {
@@ -31,11 +31,11 @@
         return column.kind === "category" ? "文字" : "数值";
     }
 
-    function sourceFileEntry(name, contents) {
+    function sourceFileEntry(name, tables) {
         const item = element("li");
         const details = element("details", "source-file");
         const summary = element("summary", "source-file-name", name);
-        const content = element("pre", "source-file-content");
+        const content = element("div", "source-file-content");
         content.tabIndex = 0;
         content.setAttribute("role", "region");
         content.setAttribute("aria-label", `${name} 原始内容`);
@@ -44,8 +44,30 @@
 
         function populate() {
             if (!details.open) return;
-            const text = contents?.[name];
-            content.textContent = typeof text === "string" ? text || "文件为空" : "源文件内容不可用";
+            const source = tables?.[name];
+            if (!source?.rows.length && !source?.headers.length) {
+                content.append(element("p", "list-empty", source ? "文件为空" : "源文件内容不可用"));
+            } else {
+                const table = element("table", "source-table");
+                table.setAttribute("aria-label", name);
+                const heading = table.createTHead().insertRow();
+                for (const name of source.headers) {
+                    const cell = element("th", "", name);
+                    cell.scope = "col";
+                    heading.append(cell);
+                }
+                const body = table.createTBody();
+                for (const values of source.rows) {
+                    const row = body.insertRow();
+                    const time = element("th", "", values[0] ?? "");
+                    time.scope = "row";
+                    row.append(time);
+                    for (let index = 1; index < source.headers.length; index += 1) {
+                        row.append(element("td", "", values[index] ?? ""));
+                    }
+                }
+                content.append(table);
+            }
             details.removeEventListener("toggle", populate);
         }
 
@@ -60,24 +82,35 @@
             color: seriesColors[index % seriesColors.length],
         }));
         const rows = data.rows;
-        const defaults = columns.filter(column => column.kind === "number").slice(0, 3);
-        const firstCategory = columns.find(column => column.kind === "category");
-        if (firstCategory) defaults.push(firstCategory);
-        const selected = new Set(defaults.map(column => column.index));
+        const {default_columns, shared_axes = {}} = data.view_config ?? {};
+        const defaultColumns = new Set(default_columns);
+        const selected = new Set(columns.filter(column => defaultColumns.has(column.name)).map(column => column.index));
+        const byName = new Map(columns.map(column => [column.name, column]));
+        const warnings = [...data.warnings];
         const groups = [];
+        for (const [name, names] of Object.entries(shared_axes)) {
+            const members = names.map(name => byName.get(name)).filter(Boolean);
+            if (members.length < 2) continue;
+            if (members.some(member => member.kind !== members[0].kind)) {
+                warnings.push(`配置中的纵轴组「${name}」同时包含数值列和文字列，已使用各列自己的刻度。`);
+                continue;
+            }
+            groups.push({
+                name,
+                indices: members.map(member => member.index),
+                categories: [...new Set(members.flatMap(member => member.categories))],
+            });
+        }
         let filter = "all";
-        let editingGroup = -1;
         let visibleSeries = [];
         let lastFrame;
         const search = byId("column-search");
         const columnList = byId("column-list");
         const emptyChart = byId("chart-empty");
         const tooltip = byId("chart-tooltip");
-        const groupDialog = byId("group-dialog");
-        const groupName = byId("group-name");
-        const groupColumns = byId("group-columns");
-        const groupSave = byId("group-save");
-        const groupError = byId("group-error");
+        const markersPanel = byId("markers-panel");
+        const markersList = byId("markers-list");
+        const markerNotes = new Map();
 
         const folderParts = data.folder.split(/[\\/]+/).filter(Boolean);
         const folderName = folderParts.at(-1) ?? data.folder;
@@ -98,18 +131,17 @@
                 : `${start} – ${end}`;
         }
         byId("files").hidden = data.files.length === 0;
-        byId("files-list").replaceChildren(...data.files.map(name => sourceFileEntry(name, data.source_contents)));
-        byId("warnings").hidden = data.warnings.length === 0;
-        byId("warning-count").textContent = integerFormat.format(data.warnings.length);
-        byId("warning-list").replaceChildren(...data.warnings.map(warning => element("li", "", warning)));
+        byId("files-list").replaceChildren(...data.files.map(name => sourceFileEntry(name, data.source_tables)));
+        byId("warnings").hidden = warnings.length === 0;
+        byId("warning-count").textContent = integerFormat.format(warnings.length);
+        byId("warning-list").replaceChildren(...warnings.map(warning => element("li", "", warning)));
 
-        function columnOption(column, checked, disabled = false) {
+        function columnOption(column, checked) {
             const label = element("label", "column-option");
             const input = element("input");
             input.type = "checkbox";
             input.value = String(column.index);
             input.checked = checked;
-            input.disabled = disabled;
             const name = element("span", "column-name", column.name);
             name.title = column.name;
             label.append(
@@ -194,10 +226,11 @@
                 byId("zoom-reset").disabled = !info.zoomed;
                 byId("zoom-out").disabled = !info.zoomed;
                 byId("chart-status").textContent = visibleSeries.length && rows.length
-                    ? `${info.relativeScale ? "纵轴按各列范围显示 · " : ""}拖动平移 · 滚轮缩放 · 悬停读数`
+                    ? `${info.relativeScale ? "纵轴按各列范围显示 · " : ""}拖动平移 · 滚轮缩放 · 双击虚线添加标记`
                     : "";
             },
             onHover: showHover,
+            onMark: addMarker,
         });
 
         function refreshChart() {
@@ -219,68 +252,54 @@
                 heading.textContent = "选择要查看的列";
                 description.textContent = "在左侧勾选一列或多列，图表将随即更新。";
             }
-            chart.update({rows, series: visibleSeries, groups});
+            chart.update({rows, series: visibleSeries, groups, gaps: data.gaps});
             renderLegend();
         }
 
-        function clearGroupError() {
-            groupError.hidden = true;
-            groupError.textContent = "";
+        function syncMarkers() {
+            markersPanel.hidden = !markerNotes.size;
+            chart.setMarkers([...markerNotes.keys()]);
         }
 
-        function groupErrorMessage(message) {
-            groupError.textContent = message;
-            groupError.hidden = false;
-        }
+        function addMarker(row) {
+            const existing = markerNotes.get(row.time);
+            if (existing) {
+                existing.focus({preventScroll: true});
+                return;
+            }
 
-        function renderGroupOptions(indices) {
-            const elsewhere = new Set(groups.flatMap((group, index) => index === editingGroup ? [] : group.indices));
-            groupColumns.replaceChildren(...columns.map(column => {
-                const option = columnOption(column, indices.includes(column.index), elsewhere.has(column.index));
-                if (elsewhere.has(column.index)) option.title = `已属于 ${groupFor(column.index).name}`;
-                return option;
-            }));
-            groupSave.disabled = columns.length < 2;
-        }
-
-        function showGroupForm(index) {
-            editingGroup = index;
-            const group = groups[index];
-            groupName.value = group?.name ?? "";
-            groupSave.textContent = group ? "保存修改" : "添加分组";
-            renderGroupOptions(group?.indices ?? []);
-            clearGroupError();
-        }
-
-        function renderGroups() {
-            const list = byId("group-list");
-            byId("group-open").disabled = columns.length < 2;
-            const badge = byId("group-count");
-            if (badge) badge.textContent = String(groups.length);
-            const items = groups.map((group, index) => {
-                const info = element("div", "");
-                info.append(element("strong", "", group.name), element("p", "", group.indices.map(i => columns[i].name).join("、")));
-                const edit = element("button", "button button-quiet", "编辑");
-                edit.type = "button";
-                edit.addEventListener("click", () => {
-                    showGroupForm(index);
-                    groupName.focus();
-                });
-                const remove = element("button", "button button-danger", "删除");
-                remove.type = "button";
-                remove.addEventListener("click", () => {
-                    groups.splice(index, 1);
-                    renderGroups();
-                    showGroupForm(-1);
-                    refreshChart();
-                });
-                const actions = element("div", "group-actions");
-                actions.append(edit, remove);
-                const item = element("div", "group-item");
-                item.append(info, actions);
-                return item;
+            const item = element("li", "marker-item");
+            const timeLabel = labelTime(row.time, row.time % 1000 !== 0);
+            const remove = element("button", "marker-remove", "×");
+            remove.type = "button";
+            remove.setAttribute("aria-label", `删除 ${timeLabel} 的标记`);
+            const time = element("time", "marker-time", timeLabel);
+            time.dateTime = new Date(row.time).toISOString();
+            const note = element("input", "marker-note");
+            note.type = "text";
+            note.placeholder = "添加备注";
+            note.setAttribute("aria-label", `${timeLabel} 的备注`);
+            const values = element("div", "marker-values");
+            for (const column of visibleSeries) {
+                const value = row.values[column.index];
+                const valueLabel = element("span", "marker-value");
+                valueLabel.append(
+                    swatch("legend-swatch", column.color),
+                    element("span", "marker-column", column.name),
+                    element("span", "marker-reading", value == null ? "—" : String(value)),
+                );
+                values.append(valueLabel);
+            }
+            remove.addEventListener("click", () => {
+                markerNotes.delete(row.time);
+                item.remove();
+                syncMarkers();
             });
-            list.replaceChildren(...(items.length ? items : [element("p", "list-empty", "暂无纵轴分组")]));
+            item.append(remove, time, note, values);
+            markersList.prepend(item);
+            markerNotes.set(row.time, note);
+            syncMarkers();
+            note.focus({preventScroll: true});
         }
 
         search.addEventListener("input", renderColumnList);
@@ -304,41 +323,11 @@
             renderColumnList();
             refreshChart();
         });
-        byId("group-open").addEventListener("click", () => {
-            showGroupForm(-1);
-            groupDialog.showModal();
-        });
-        byId("group-close").addEventListener("click", () => groupDialog.close());
-        groupName.addEventListener("input", clearGroupError);
-        groupColumns.addEventListener("change", clearGroupError);
-        byId("group-form").addEventListener("submit", event => {
-            event.preventDefault();
-            const name = groupName.value.trim();
-            const indices = [...groupColumns.querySelectorAll("input:checked")].map(input => Number(input.value));
-            if (!name) return groupErrorMessage("请输入分组名称。");
-            if (groups.some((group, index) => index !== editingGroup && group.name === name)) {
-                return groupErrorMessage("这个分组名称已存在。");
-            }
-            if (indices.length < 2) return groupErrorMessage("请至少选择两列。");
-            if (new Set(indices.map(index => columns[index].kind)).size !== 1) {
-                return groupErrorMessage("同一分组中的列须同为数值或同为文字。");
-            }
-            const group = {name, indices};
-            if (columns[indices[0]].kind === "category") {
-                group.categories = [...new Set(indices.flatMap(index => columns[index].categories))];
-            }
-            if (editingGroup < 0) groups.push(group);
-            else groups[editingGroup] = group;
-            renderGroups();
-            showGroupForm(-1);
-            refreshChart();
-        });
         byId("zoom-in").addEventListener("click", () => chart.zoomBy(1.5));
         byId("zoom-out").addEventListener("click", () => chart.zoomBy(1 / 1.5));
         byId("zoom-reset").addEventListener("click", () => chart.resetZoom());
 
         renderColumnList();
-        renderGroups();
         refreshChart();
     }
 

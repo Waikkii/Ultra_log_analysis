@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from charge_analyzer.parser import parse_folder
+from charge_analyzer.parser import find_gaps, parse_folder
 
 
 class ParseFolderTests(unittest.TestCase):
@@ -30,7 +30,10 @@ class ParseFolderTests(unittest.TestCase):
         )
         self.assertEqual([row["values"] for row in result["rows"]], [[31, 2, 4120, 702, 13, 22, 4]])
         self.assertEqual(result["warnings"], [])
-        self.assertEqual(result["source_contents"], {"charge-log.0": text})
+        self.assertEqual(
+            result["source_tables"]["charge-log.0"]["rows"],
+            [["2026-07-12 08:14:02", "31", "2", "4120", "702", "13", "22", "4"]],
+        )
 
     def test_rotated_files_and_changing_columns(self):
         self.write(
@@ -64,6 +67,10 @@ class ParseFolderTests(unittest.TestCase):
         milliseconds = int(datetime(2026, 11, 18, 15, 37, 17, tzinfo=timezone.utc).timestamp() * 1000)
         self.assertEqual(result["rows"][0]["time"], milliseconds)
         self.assertEqual(result["warnings"], [])
+        self.assertEqual(
+            result["source_tables"]["charge-log.2"],
+            {"headers": ["Time", "uiSOC", "flags", "status"], "rows": [["2026-11-18 15:37:19", "44", "-0xA", "idle"]]},
+        )
 
     def test_tab_cells_include_leading_middle_and_trailing_blanks(self):
         self.write(
@@ -165,6 +172,61 @@ class ParseFolderTests(unittest.TestCase):
         self.assertEqual([row["values"] for row in result["rows"]], [[40, "early"], [42, "late"], [43, "latest"]])
         self.assertEqual(result["rows"][1]["time"] - result["rows"][0]["time"], 247)
         self.assertEqual(result["columns"][1]["categories"], ["early", "late", "latest"])
+
+    def test_source_table_collapses_repeated_headers_and_aligns_changed_schema(self):
+        malformed = "2026-07-12 08:14:04 > 32 710 extra"
+        self.write(
+            "charge-log.0",
+            "Time uiSOC flags",
+            "2026-07-12 08:14:02 > +031 0x1A",
+            "Time uiSOC flags",
+            "2026-07-12 08:14:01 > 30 None",
+            "unrecognized source content",
+            "Time current uiSOC",
+            "2026-07-12 08:14:03 > 702 31",
+            malformed,
+        )
+
+        result = parse_folder(self.folder)
+
+        self.assertEqual(result["source_tables"]["charge-log.0"], {
+            "headers": ["Time", "uiSOC", "flags", "current", "原始内容"],
+            "rows": [
+                ["2026-07-12 08:14:02", "+031", "0x1A", "", ""],
+                ["2026-07-12 08:14:01", "30", "None", "", ""],
+                ["", "", "", "", "unrecognized source content"],
+                ["2026-07-12 08:14:03", "31", "", "702", ""],
+                ["2026-07-12 08:14:04", "", "", "", malformed],
+            ],
+        })
+
+    def test_time_gaps_span_files_and_ignore_missing_values_and_duplicate_times(self):
+        self.write(
+            "charge-log.0",
+            "Time uiSOC",
+            "2026-07-12 08:14:00 > 30",
+            "2026-07-12 08:14:01 > None",
+            "2026-07-12 08:14:02 > 31",
+        )
+        self.write(
+            "charge-log.1",
+            "Time uiSOC",
+            "2026-07-12 08:14:02 > 31",
+            "2026-07-12 08:14:12 > 32",
+            "2026-07-12 08:14:13 > 33",
+        )
+
+        result = parse_folder(self.folder)
+        rows = result["rows"]
+
+        self.assertEqual(result["gaps"], [[rows[3]["time"], rows[4]["time"]]])
+        self.assertEqual(find_gaps(rows, expected_interval_ms=5000), [])
+
+    def test_explicit_sampling_interval_allows_two_records(self):
+        rows = [{"time": 2000}, {"time": 12000}]
+
+        self.assertEqual(find_gaps(rows), [])
+        self.assertEqual(find_gaps(rows, expected_interval_ms=1000), [[2000, 12000]])
 
 
 if __name__ == "__main__":

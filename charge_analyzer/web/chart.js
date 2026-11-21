@@ -60,16 +60,20 @@
   }
 
   class ChargeChart {
-    constructor(canvas, { onFrame, onHover } = {}) {
+    constructor(canvas, { onFrame, onHover, onMark } = {}) {
       this.canvas = canvas;
       this.context = canvas.getContext("2d");
       this.frame = document.createElement("canvas");
       this.frameContext = this.frame.getContext("2d");
       this.onFrame = onFrame;
       this.onHover = onHover;
+      this.onMark = onMark;
       this.rows = [];
       this.series = [];
       this.groups = [];
+      this.gaps = [];
+      this.gapEnds = new Map();
+      this.markers = new Set();
       this.axes = new Map();
       this.totalStart = this.start = 0;
       this.totalEnd = this.end = 1000;
@@ -93,12 +97,12 @@
         this.pointer = null;
         this.schedule();
       });
-      canvas.addEventListener("dblclick", () => this.resetZoom());
+      canvas.addEventListener("dblclick", (event) => this.markAt(event));
       canvas.addEventListener("wheel", (event) => this.wheel(event), { passive: false });
       canvas.addEventListener("keydown", (event) => this.keyDown(event));
     }
 
-    update({ rows = [], series = [], groups = [] } = {}) {
+    update({ rows = [], series = [], groups = [], gaps = [] } = {}) {
       if (rows !== this.rows) {
         this.rows = rows;
         this.totalStart = rows[0]?.time ?? 0;
@@ -112,7 +116,16 @@
       }
       this.series = series;
       this.groups = groups;
+      if (gaps !== this.gaps) {
+        this.gaps = gaps;
+        this.gapEnds = new Map(gaps.map(([left, right]) => [right, left]));
+      }
       this.schedule(true);
+    }
+
+    setMarkers(times) {
+      this.markers = new Set(times);
+      this.schedule();
     }
 
     resetZoom() {
@@ -164,9 +177,11 @@
       return { x: event.clientX - rect.left, y: event.clientY - rect.top };
     }
 
-    contains({ x, y }) {
+    contains({ x, y }, horizontalPadding = 0) {
       const plot = this.plot;
-      return plot && x >= plot.left && x <= plot.right && y >= plot.top && y <= plot.bottom;
+      return plot && plot.width > 0 && plot.height > 0
+        && x >= plot.left - horizontalPadding && x <= plot.right + horizontalPadding
+        && y >= plot.top && y <= plot.bottom;
     }
 
     pointerDown(event) {
@@ -181,7 +196,7 @@
 
     pointerMove(event) {
       this.pointer = this.pointerLocation(event);
-      if (this.drag?.id === event.pointerId) {
+      if (this.drag && this.drag.id === event.pointerId) {
         const span = this.drag.end - this.drag.start;
         const change = ((this.drag.x - this.pointer.x) / this.plot.width) * span;
         this.setRange(this.drag.start + change, span);
@@ -190,11 +205,56 @@
     }
 
     pointerUp(event, cancelled = false) {
-      if (this.drag?.id !== event.pointerId) return;
+      if (!this.drag || this.drag.id !== event.pointerId) return;
       this.drag = null;
       this.canvas.style.cursor = "";
       if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
       if (cancelled || event.pointerType === "touch") this.pointer = null;
+      this.schedule();
+    }
+
+    gapAt(time) {
+      let first = 0;
+      let last = this.gaps.length;
+      while (first < last) {
+        const mid = Math.floor((first + last) / 2);
+        if (this.gaps[mid][0] < time) first = mid + 1;
+        else last = mid;
+      }
+      const gap = this.gaps[first - 1];
+      return gap && time < gap[1] ? gap : null;
+    }
+
+    sampleAt(pointer) {
+      if (!pointer || this.drag || !this.contains(pointer, 2) || !this.series.length) return null;
+      const { rows, start, end, plot } = this;
+      const fraction = Math.max(0, Math.min(1, (pointer.x - plot.left) / plot.width));
+      const time = start + fraction * (end - start);
+      const gap = this.gapAt(time);
+      if (gap) {
+        const left = this.x(gap[0]);
+        const right = this.x(gap[1]);
+        // Give the gap endpoints a small hit area for samples at either edge.
+        const tolerance = Math.min(3, (right - left) / 4);
+        const nearLeft = gap[0] >= start && pointer.x - left <= tolerance;
+        const nearRight = gap[1] <= end && right - pointer.x <= tolerance;
+        if (!nearLeft && !nearRight) return null;
+      }
+      const first = rowIndex(rows, start);
+      const after = rowIndex(rows, end, true);
+      if (first === after) return null;
+      let index = Math.min(after - 1, rowIndex(rows, time));
+      if (index > first && time - rows[index - 1].time <= rows[index].time - time) index -= 1;
+      return rows[index];
+    }
+
+    markAt(event) {
+      const pointer = this.pointerLocation(event);
+      const row = this.sampleAt(pointer);
+      if (!row) return;
+      this.pointer = pointer;
+      this.onMark?.(row);
+      event.preventDefault();
       this.schedule();
     }
 
@@ -223,11 +283,12 @@
     }
 
     visiblePoints(series, visit) {
-      const { rows, start, end, firstVisible, afterVisible } = this;
+      const { rows, start, end, firstVisible, afterVisible, gapEnds } = this;
       const boundary = (time, nextIndex) => {
         const before = rows[nextIndex - 1];
         const next = rows[nextIndex];
         if (!before || !next || before.time >= time || next.time <= time) return;
+        if (gapEnds.get(next.time) === before.time) return;
         const from = before.values[series.index];
         const to = next.values[series.index];
         if (from == null || to == null) return;
@@ -240,6 +301,9 @@
       boundary(start, firstVisible);
       for (let index = firstVisible; index < afterVisible; index += 1) {
         const row = rows[index];
+        if (gapEnds.size && index > firstVisible && gapEnds.get(row.time) === rows[index - 1].time) {
+          visit(row.time, null);
+        }
         visit(row.time, row.values[series.index]);
       }
       boundary(end, afterVisible);
@@ -604,28 +668,40 @@
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
       ctx.drawImage(this.frame, 0, 0);
+      ctx.setTransform(this.pixelRatio, 0, 0, this.pixelRatio, 0, 0);
+
+      if (this.markers.size && this.plot.width > 0 && this.plot.height > 0) {
+        ctx.strokeStyle = "#c93543";
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        for (const time of this.markers) {
+          if (time < this.start || time > this.end) continue;
+          const x = Math.round(this.x(time)) + 0.5;
+          ctx.moveTo(x, this.plot.top);
+          ctx.lineTo(x, this.plot.bottom);
+        }
+        ctx.stroke();
+      }
 
       const pointer = this.pointer;
-      if (!pointer || this.drag || !this.contains(pointer) || !this.series.length || this.firstVisible === this.afterVisible) {
+      const row = this.sampleAt(pointer);
+      if (!row) {
         if (this.hoverRow !== null) this.onHover?.(null);
         this.hoverRow = null;
         return;
       }
-      const time = this.start + ((pointer.x - this.plot.left) / this.plot.width) * (this.end - this.start);
-      let index = Math.min(this.afterVisible - 1, rowIndex(this.rows, time));
-      if (index > this.firstVisible && time - this.rows[index - 1].time <= this.rows[index].time - time) index -= 1;
-      const row = this.rows[index];
       const x = this.x(row.time);
 
-      ctx.setTransform(this.pixelRatio, 0, 0, this.pixelRatio, 0, 0);
-      ctx.strokeStyle = this.style.crosshair;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 5]);
-      ctx.beginPath();
-      ctx.moveTo(Math.round(x) + 0.5, this.plot.top);
-      ctx.lineTo(Math.round(x) + 0.5, this.plot.bottom);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      if (!this.markers.has(row.time)) {
+        ctx.strokeStyle = this.style.crosshair;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 5]);
+        ctx.beginPath();
+        ctx.moveTo(Math.round(x) + 0.5, this.plot.top);
+        ctx.lineTo(Math.round(x) + 0.5, this.plot.bottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
 
       for (const series of this.series) {
         const y = this.y(series.index, row.values[series.index]);

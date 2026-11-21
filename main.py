@@ -8,6 +8,8 @@ import webbrowser
 from pathlib import Path
 
 from charge_analyzer.analyzers import ANALYZERS
+from charge_analyzer.config import load_config
+from charge_analyzer.parser import find_gaps
 from charge_analyzer.report import render_report
 from charge_analyzer.windows import install_context_menu, uninstall_context_menu
 
@@ -44,8 +46,12 @@ def analyze(args: argparse.Namespace) -> int:
     if not folder.is_dir():
         raise NotADirectoryError(f"请选择文件夹：{folder}")
 
+    config = load_config(Path(__file__).resolve().parent)
     data = analyzer.parse(folder)
-    data.update(analyzer=args.analyzer, title=analyzer.title)
+    expected_interval = config["expected_interval_seconds"]
+    if expected_interval is not None:
+        data["gaps"] = find_gaps(data["rows"], expected_interval_ms=expected_interval * 1000)
+    data.update(analyzer=args.analyzer, title=analyzer.title, view_config=config)
     report = render_report(data)
     if args.output is not None:
         output = args.output.resolve()

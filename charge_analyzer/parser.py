@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from itertools import pairwise
 import math
 from pathlib import Path
 import re
+from statistics import median_low
 
 
 _FILENAME = re.compile(r"charge-log\.([0-9]+)")
@@ -41,11 +44,44 @@ class _Warnings:
 
 @dataclass(frozen=True)
 class _Unaligned:
-    file: str
-    line_number: int
     text: str
     payload_start: int
     value_count: int
+
+
+@dataclass(frozen=True)
+class _Position:
+    file: str
+    line_number: int
+    timestamp: str
+    time: int
+
+
+@dataclass
+class _SourceRow:
+    line_number: int
+    timestamp: str
+    values: dict[str, str] = field(default_factory=dict)
+    raw: str = ""
+
+
+@dataclass
+class _SourceTable:
+    names: dict[str, None] = field(default_factory=dict)
+    rows: list[_SourceRow] = field(default_factory=list)
+
+    def payload(self) -> dict[str, list]:
+        self.rows.sort(key=lambda row: row.line_number)
+        headers = ["Time", *self.names]
+        rows = [[row.timestamp, *(row.values.get(name, "") for name in self.names)] for row in self.rows]
+        if any(row.raw for row in self.rows):
+            label = "原始内容"
+            while label in self.names:
+                label += "（原文）"
+            headers.append(label)
+            for values, row in zip(rows, self.rows):
+                values.append(row.raw)
+        return {"headers": headers, "rows": rows}
 
 
 @dataclass
@@ -53,7 +89,7 @@ class _Section:
     names: list[str]
     header_words: list[tuple[int, int]]
     header_separator: str | None
-    rows: list[tuple[int, list[str | None] | _Unaligned]] = field(default_factory=list)
+    rows: list[tuple[_Position, list[str | None] | _Unaligned]] = field(default_factory=list)
     starts: list[int | None] = field(default_factory=list)
     ends: list[int | None] = field(default_factory=list)
     separator: str | None = None
@@ -74,19 +110,19 @@ class _Section:
         if self.separator != separator:
             self.separator = None
 
-    def read_row(self, time: int, text: str, payload_start: int, file: str, number: int) -> None:
+    def read_row(self, position: _Position, text: str, payload_start: int) -> None:
         tab_values = _tab_values(text[payload_start:], len(self.names))
         if tab_values is not None:
-            self.rows.append((time, tab_values))
+            self.rows.append((position, tab_values))
             return
         words = list(_FIELD.finditer(text, payload_start))
         if len(words) == len(self.names):
             self.observe(text, payload_start, words)
-            self.rows.append((time, [word.group() for word in words]))
+            self.rows.append((position, [word.group() for word in words]))
         elif not words:
-            self.rows.append((time, [None] * len(self.names)))
+            self.rows.append((position, [None] * len(self.names)))
         else:
-            self.rows.append((time, _Unaligned(file, number, text, payload_start, len(words))))
+            self.rows.append((position, _Unaligned(text, payload_start, len(words))))
 
     def align(self, row: _Unaligned) -> list[str | None] | None:
         separator = self.separator if self.starts else self.header_separator
@@ -103,24 +139,30 @@ class _Section:
         ends = [end for _, end in self.header_words]
         return _align_words(words, starts, ends)
 
-    def finish(self, warnings: _Warnings) -> list[tuple[int, dict[str, str]]]:
+    def finish(self, warnings: _Warnings, source_tables: dict[str, _SourceTable]) -> list[tuple[int, dict[str, str]]]:
+        for filename in {position.file for position, _ in self.rows}:
+            source_tables[filename].names.update(dict.fromkeys(self.names))
         records = []
-        for time, row in self.rows:
+        for position, row in self.rows:
+            source_rows = source_tables[position.file].rows
             if isinstance(row, _Unaligned):
                 values = self.align(row)
                 if values is None:
                     details = f"表头有 {len(self.names)} 列，识别到 {row.value_count} 个值"
                     reason = "空白列位置无法确定" if row.value_count < len(self.names) else "值的数量超过表头列数"
-                    warnings.add(f"{row.file}:{row.line_number} {details}，{reason}。已将该行标记为缺失。")
-                    records.append((time, {}))
+                    warnings.add(f"{position.file}:{position.line_number} {details}，{reason}。已将该行标记为缺失。")
+                    source_rows.append(_SourceRow(position.line_number, position.timestamp, raw=row.text))
+                    records.append((position.time, {}))
                     continue
             else:
                 values = row
-            records.append((time, {
+            cell_values = {
                 name: value
                 for name, raw in zip(self.names, values)
-                if (value := _present_value(raw)) is not None
-            }))
+                if raw is not None and (value := raw.strip())
+            }
+            source_rows.append(_SourceRow(position.line_number, position.timestamp, cell_values))
+            records.append((position.time, cell_values))
         return records
 
 
@@ -217,13 +259,6 @@ def _milliseconds(timestamp: str) -> int:
     return (elapsed.days * 86400 + elapsed.seconds) * 1000 + elapsed.microseconds // 1000
 
 
-def _present_value(value: str | None) -> str | None:
-    if value is None:
-        return None
-    stripped = value.strip()
-    return stripped if stripped and stripped.casefold() != "none" else None
-
-
 def _number(value: str) -> int | float | None:
     try:
         if _HEX.fullmatch(value) or _INTEGER.fullmatch(value):
@@ -238,6 +273,24 @@ def _number(value: str) -> int | float | None:
     return None
 
 
+def find_gaps(
+    rows: Iterable[dict], *, gap_factor: float = 3, expected_interval_ms: float | None = None
+) -> list[list[int]]:
+    """Find unusually long intervals between chronological rows."""
+    if not math.isfinite(gap_factor) or gap_factor < 1:
+        raise ValueError("gap_factor must be finite and at least 1")
+    times = [row["time"] for row in rows]
+    if expected_interval_ms is None:
+        intervals = [right - left for left, right in pairwise(times) if right > left]
+        if len(intervals) < 2:
+            return []
+        expected_interval_ms = median_low(intervals)
+    elif not math.isfinite(expected_interval_ms) or expected_interval_ms <= 0:
+        raise ValueError("expected_interval_ms must be finite and positive")
+    threshold = expected_interval_ms * gap_factor
+    return [[left, right] for left, right in pairwise(times) if right - left > threshold]
+
+
 def parse_folder(path: str | Path) -> dict:
     """Read charge-log.N files, preserving the logged local wall-clock time."""
     folder = Path(path).expanduser().resolve()
@@ -248,7 +301,7 @@ def parse_folder(path: str | Path) -> dict:
     ]
     sources.sort(key=lambda item: (item[0], item[1].name))
     warnings = _Warnings()
-    source_contents: dict[str, str] = {}
+    source_tables: dict[str, _SourceTable] = {}
     names: dict[str, None] = {}
     records: list[tuple[int, dict[str, str]]] = []
     section = None
@@ -258,30 +311,36 @@ def parse_folder(path: str | Path) -> dict:
         except (OSError, UnicodeError) as error:
             warnings.add(f"{source.name} 读取失败（{error}）。")
             continue
-        source_contents[source.name] = text
+        table = _SourceTable()
+        source_tables[source.name] = table
         for number, line in enumerate(text.splitlines(), start=1):
             if _HEADER.match(line):
                 if section is not None:
-                    records.extend(section.finish(warnings))
+                    records.extend(section.finish(warnings, source_tables))
                 section = _section(line)
                 names.update(dict.fromkeys(section.names))
+                table.names.update(dict.fromkeys(section.names))
                 continue
             timestamp = _TIMESTAMP.match(line)
             if timestamp is None:
                 if line.strip():
                     warnings.add(f"{source.name}:{number} 无法识别为表头或时间记录，已跳过。")
+                    table.rows.append(_SourceRow(number, "", raw=line))
                 continue
             if section is None:
                 warnings.add(f"{source.name}:{number} 记录出现在首个表头之前，已跳过。")
+                table.rows.append(_SourceRow(number, timestamp[1], raw=line))
                 continue
             try:
                 time = _milliseconds(timestamp[1])
             except ValueError:
                 warnings.add(f"{source.name}:{number} 时间无效，已跳过。")
+                table.rows.append(_SourceRow(number, timestamp[1], raw=line))
                 continue
-            section.read_row(time, line, timestamp.end(), source.name, number)
+            position = _Position(source.name, number, timestamp[1], time)
+            section.read_row(position, line, timestamp.end())
     if section is not None:
-        records.extend(section.finish(warnings))
+        records.extend(section.finish(warnings, source_tables))
     if not sources:
         warnings.add("此文件夹中没有 charge-log.n 日志文件。")
     elif not records:
@@ -291,7 +350,7 @@ def parse_folder(path: str | Path) -> dict:
     distinct: dict[str, dict[str, int | float | None]] = {name: {} for name in names}
     for _, values in records:
         for name, value in values.items():
-            if value not in distinct[name]:
+            if value.casefold() != "none" and value not in distinct[name]:
                 distinct[name][value] = _number(value)
     columns = []
     converters = []
@@ -309,9 +368,10 @@ def parse_folder(path: str | Path) -> dict:
     ]
     return {
         "folder": str(folder),
-        "files": list(source_contents),
+        "files": list(source_tables),
         "columns": columns,
         "rows": rows,
         "warnings": warnings.all(),
-        "source_contents": source_contents,
+        "source_tables": {name: table.payload() for name, table in source_tables.items()},
+        "gaps": find_gaps(rows),
     }
