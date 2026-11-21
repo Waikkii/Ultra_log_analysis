@@ -116,6 +116,26 @@ class ParseFolderTests(unittest.TestCase):
         self.assertEqual([row["values"] for row in result["rows"]], [[42, 3, "low"], [None, 4, "low"]])
         self.assertEqual(result["warnings"], [])
 
+    def test_register_fields_preserve_internal_space_and_later_columns(self):
+        self.write(
+            "charge-log.0",
+            "Time  uiSOC  R[0x 9f]  R[0x  7]  current",
+            "2026-07-12 08:14:02 >  31  R[0x 1e]  R[0x  8]  702",
+            "2026-07-12 08:14:03 >  32    R[0x  9]  710",
+        )
+
+        result = parse_folder(self.folder)
+
+        self.assertEqual(
+            [(column["name"], column["kind"]) for column in result["columns"]],
+            [("uiSOC", "number"), ("R[0x 9f]", "category"), ("R[0x  7]", "category"), ("current", "number")],
+        )
+        self.assertEqual(
+            [row["values"] for row in result["rows"]],
+            [[31, "R[0x 1e]", "R[0x  8]", 702], [32, None, "R[0x  9]", 710]],
+        )
+        self.assertEqual(result["warnings"], [])
+
     def test_unrecoverable_row_is_a_gap_with_a_warning(self):
         self.write(
             "charge-log.0",

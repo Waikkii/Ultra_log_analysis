@@ -14,7 +14,7 @@ _HEADER = re.compile(r"^\s*Time\s+\S")
 _TIMESTAMP = re.compile(
     r"^\s*(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d{1,6})?)[ \t]*>"
 )
-_WORD = re.compile(r"\S+")
+_FIELD = re.compile(r"R\[0[xX] *[0-9a-fA-F]+\](?=\s|$)|\S+")
 _INTEGER = re.compile(r"[+-]?[0-9]+")
 _HEX = re.compile(r"[+-]?0[xX][0-9a-fA-F]+")
 _DECIMAL = re.compile(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
@@ -79,7 +79,7 @@ class _Section:
         if tab_values is not None:
             self.rows.append((time, tab_values))
             return
-        words = list(_WORD.finditer(text, payload_start))
+        words = list(_FIELD.finditer(text, payload_start))
         if len(words) == len(self.names):
             self.observe(text, payload_start, words)
             self.rows.append((time, [word.group() for word in words]))
@@ -90,12 +90,11 @@ class _Section:
 
     def align(self, row: _Unaligned) -> list[str | None] | None:
         separator = self.separator if self.starts else self.header_separator
-        payload = row.text[row.payload_start:]
-        if separator and payload.startswith(separator):
-            values = payload[len(separator):].split(separator)
-            if len(values) == len(self.names) and all(not value or _WORD.fullmatch(value) for value in values):
+        words = list(_FIELD.finditer(row.text, row.payload_start))
+        if separator:
+            values = _split_uniform(row.text, row.payload_start, words, separator, len(self.names))
+            if values is not None:
                 return values
-        words = list(_WORD.finditer(row.text, row.payload_start))
         if self.starts:
             learned = _align_words(words, self.starts, self.ends)
             if learned is not None:
@@ -134,6 +133,24 @@ def _tab_values(payload: str, count: int) -> list[str] | None:
     return values if len(values) == count else None
 
 
+def _split_uniform(
+    text: str, start: int, fields: list[re.Match[str]], separator: str, count: int
+) -> list[str | None] | None:
+    values = []
+    for match in fields:
+        gap = text[start:match.start()]
+        repeats = len(gap) // len(separator)
+        if repeats < 1 or len(values) + repeats > count or gap != separator * repeats:
+            return None
+        values.extend([None] * (repeats - 1))
+        values.append(match.group())
+        start = match.end()
+    trailing = count - len(values)
+    if text[start:] == separator * trailing:
+        return values + [None] * trailing
+    return None
+
+
 def _align_words(
     words: list[re.Match[str]], starts: list[int | None], ends: list[int | None]
 ) -> list[str | None] | None:
@@ -168,7 +185,7 @@ def _align_words(
 
 
 def _section(line: str) -> _Section:
-    header = list(_WORD.finditer(line))
+    header = list(_FIELD.finditer(line))
     names = []
     seen: dict[str, int] = {}
     for word in header[1:]:
