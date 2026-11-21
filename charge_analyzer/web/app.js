@@ -31,6 +31,28 @@
         return column.kind === "category" ? "文字" : "数值";
     }
 
+    function sourceFileEntry(name, contents) {
+        const item = element("li");
+        const details = element("details", "source-file");
+        const summary = element("summary", "source-file-name", name);
+        const content = element("pre", "source-file-content");
+        content.tabIndex = 0;
+        content.setAttribute("role", "region");
+        content.setAttribute("aria-label", `${name} 原始内容`);
+        details.append(summary, content);
+        item.append(details);
+
+        function populate() {
+            if (!details.open) return;
+            const text = contents?.[name];
+            content.textContent = typeof text === "string" ? text || "文件为空" : "源文件内容不可用";
+            details.removeEventListener("toggle", populate);
+        }
+
+        details.addEventListener("toggle", populate);
+        return item;
+    }
+
     function initialize(data) {
         const columns = data.columns.map((column, index) => ({
             ...column,
@@ -76,7 +98,7 @@
                 : `${start} – ${end}`;
         }
         byId("files").hidden = data.files.length === 0;
-        byId("files-list").replaceChildren(...data.files.map(name => element("li", "", name)));
+        byId("files-list").replaceChildren(...data.files.map(name => sourceFileEntry(name, data.source_contents)));
         byId("warnings").hidden = data.warnings.length === 0;
         byId("warning-count").textContent = integerFormat.format(data.warnings.length);
         byId("warning-list").replaceChildren(...data.warnings.map(warning => element("li", "", warning)));

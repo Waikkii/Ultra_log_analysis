@@ -15,6 +15,23 @@ class ParseFolderTests(unittest.TestCase):
     def write(self, filename, *lines, encoding="utf-8"):
         (self.folder / filename).write_text("\n".join(lines), encoding=encoding)
 
+    def test_arbitrary_header_names_and_uneven_spacing(self):
+        text = (
+            "Time                   level  mode V1  C1  input  load  status\r\n"
+            "2026-07-12 08:14:02 >  31     2    4120   702    13     22      4\r\n"
+        )
+        (self.folder / "charge-log.0").write_bytes(text.encode("utf-8"))
+
+        result = parse_folder(self.folder)
+
+        self.assertEqual(
+            [column["name"] for column in result["columns"]],
+            ["level", "mode", "V1", "C1", "input", "load", "status"],
+        )
+        self.assertEqual([row["values"] for row in result["rows"]], [[31, 2, 4120, 702, 13, 22, 4]])
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(result["source_contents"], {"charge-log.0": text})
+
     def test_rotated_files_and_changing_columns(self):
         self.write(
             "charge-log.0",
@@ -105,12 +122,14 @@ class ParseFolderTests(unittest.TestCase):
             "Time uiSOC volt state",
             "2026-11-18 15:37:17 > 42   4013  charging",
             "2026-11-18 15:37:18 > 43       discharge",
+            "2026-11-18 15:37:19 > 44   4028  idle extra",
         )
 
         result = parse_folder(self.folder)
 
-        self.assertEqual(result["rows"][1]["values"], [None, None, None])
-        self.assertIn("charge-log.0:3", result["warnings"][0])
+        self.assertEqual([row["values"] for row in result["rows"][1:]], [[None] * 3, [None] * 3])
+        self.assertIn("charge-log.0:3 表头有 3 列，识别到 2 个值，空白列位置无法确定", result["warnings"][0])
+        self.assertIn("charge-log.0:4 表头有 3 列，识别到 4 个值，值的数量超过表头列数", result["warnings"][1])
 
     def test_chronological_sort_keeps_columns_from_each_header(self):
         self.write(

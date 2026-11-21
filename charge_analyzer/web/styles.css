@@ -41,7 +41,7 @@ summary {
   cursor: pointer;
 }
 
-:where(button, input, summary, canvas):focus-visible {
+:where(button, input, summary, canvas, .source-file-content):focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -729,7 +729,7 @@ h2 {
   color: var(--muted);
 }
 
-.source-details ul {
+.warning-list {
   max-height: 210px;
   margin: 0 0 9px;
   padding: 0 0 0 22px;
@@ -737,12 +737,52 @@ h2 {
   overflow-wrap: anywhere;
 }
 
-.source-details li {
+.warning-list li {
   padding: 2px 0;
 }
 
 .files-list {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.files-list li {
+  min-width: 0;
+}
+
+.source-file {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #f8fafc;
   font-family: ui-monospace, Consolas, monospace;
+}
+
+.source-file .source-file-name {
+  padding: 8px 10px;
+  overflow-wrap: anywhere;
+}
+
+.source-file-name:hover {
+  color: var(--blue);
+}
+
+.source-file-content {
+  max-height: min(420px, 50vh);
+  margin: 0;
+  padding: 10px 13px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 7px 7px;
+  background: var(--surface);
+  color: var(--ink);
+  white-space: pre;
+  tab-size: 4;
+  font: inherit;
+  line-height: 1.55;
+  outline-offset: -2px;
 }
 
 .app-error,

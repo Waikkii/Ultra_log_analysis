@@ -10,7 +10,7 @@ import re
 
 
 _FILENAME = re.compile(r"charge-log\.([0-9]+)")
-_HEADER = re.compile(r"^\s*Time\s+uiSOC(?:\s|$)")
+_HEADER = re.compile(r"^\s*Time\s+\S")
 _TIMESTAMP = re.compile(
     r"^\s*(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d{1,6})?)[ \t]*>"
 )
@@ -45,6 +45,7 @@ class _Unaligned:
     line_number: int
     text: str
     payload_start: int
+    value_count: int
 
 
 @dataclass
@@ -85,7 +86,7 @@ class _Section:
         elif not words:
             self.rows.append((time, [None] * len(self.names)))
         else:
-            self.rows.append((time, _Unaligned(file, number, text, payload_start)))
+            self.rows.append((time, _Unaligned(file, number, text, payload_start, len(words))))
 
     def align(self, row: _Unaligned) -> list[str | None] | None:
         separator = self.separator if self.starts else self.header_separator
@@ -109,7 +110,9 @@ class _Section:
             if isinstance(row, _Unaligned):
                 values = self.align(row)
                 if values is None:
-                    warnings.add(f"{row.file}:{row.line_number} 值与表头无法对齐，已将该行标记为缺失。")
+                    details = f"表头有 {len(self.names)} 列，识别到 {row.value_count} 个值"
+                    reason = "空白列位置无法确定" if row.value_count < len(self.names) else "值的数量超过表头列数"
+                    warnings.add(f"{row.file}:{row.line_number} {details}，{reason}。已将该行标记为缺失。")
                     records.append((time, {}))
                     continue
             else:
@@ -228,7 +231,7 @@ def parse_folder(path: str | Path) -> dict:
     ]
     sources.sort(key=lambda item: (item[0], item[1].name))
     warnings = _Warnings()
-    files = []
+    source_contents: dict[str, str] = {}
     names: dict[str, None] = {}
     records: list[tuple[int, dict[str, str]]] = []
     section = None
@@ -238,7 +241,7 @@ def parse_folder(path: str | Path) -> dict:
         except (OSError, UnicodeError) as error:
             warnings.add(f"{source.name} 读取失败（{error}）。")
             continue
-        files.append(source.name)
+        source_contents[source.name] = text
         for number, line in enumerate(text.splitlines(), start=1):
             if _HEADER.match(line):
                 if section is not None:
@@ -287,4 +290,11 @@ def parse_folder(path: str | Path) -> dict:
         {"time": time, "values": [converter.get(values.get(name)) for name, converter in zip(names, converters)]}
         for time, values in records
     ]
-    return {"folder": str(folder), "files": files, "columns": columns, "rows": rows, "warnings": warnings.all()}
+    return {
+        "folder": str(folder),
+        "files": list(source_contents),
+        "columns": columns,
+        "rows": rows,
+        "warnings": warnings.all(),
+        "source_contents": source_contents,
+    }

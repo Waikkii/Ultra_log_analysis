@@ -38,7 +38,7 @@ py main.py analyze charge-log examples/charge-demo
 py main.py analyze charge-log "D:\logs\phone capture"
 ```
 
-报告包含用于绘图的日志数据，默认保存在本机临时目录。要把报告保存在指定位置，使用 `--output`。加上 `--no-open` 可仅生成报告，之后双击 HTML 文件即可离线使用。
+报告包含用于绘图的数据和已读取的源日志全文，默认保存在本机临时目录。要把报告保存在指定位置，使用 `--output`。加上 `--no-open` 可仅生成报告，之后双击 HTML 文件即可离线使用。分享报告时，请按源日志的敏感程度处理。
 
 ```powershell
 py main.py analyze charge-log examples/charge-demo --output demo.html --no-open
@@ -49,6 +49,7 @@ py main.py analyze charge-log examples/charge-demo --output demo.html --no-open
 1. 在左侧 **数据列** 中搜索并勾选要绘制的列，可同时显示数值列和文字列。
 2. 将鼠标移到图上查看采样时刻的值，滚轮缩放时间，拖动平移，点 **全时段** 恢复完整范围。
 3. 每条数值曲线默认依据当前时间窗口内的最小值和最大值自动缩放。纵轴较多或窗口较窄时，图中的百分比表示曲线在自身纵轴范围内的位置，图例仍显示实际数值范围。
+4. 展开图表下方的 **源文件**，点击文件名即可在其下方查看原文，包括原始空格和制表符。
 
 ### 让几列共用纵轴
 
@@ -65,9 +66,11 @@ py main.py analyze charge-log examples/charge-demo --output demo.html --no-open
 ## 日志格式
 
 - 读取目录下文件名匹配 `charge-log.<数字>` 的文件。文件按数字后缀读取，采样按日志中的日期和时间合并。支持轮转文件沿用上一份文件的表头，以及同一批文件内的表头更新。
-- 表头以 `Time uiSOC` 开始。采样行以 `2026-11-18 15:37:17 >` 这样的时间开头。图表保留日志原样记录的时钟时间。
+- 表头以 `Time` 开始，后接用空白分隔的数据列名，列名可变。采样行以 `2026-11-18 15:37:17 >` 这样的时间开头。字段齐全时，按表头列顺序解析，空格数量可以和表头不同。图表保留日志原样记录的时钟时间。
 - 数值列支持十六进制、整数、小数和科学计数法。含文字的列使用离散状态。空字段和 `None` 在图上留空。解析时使用制表符分隔或可推断的空格布局定位缺失字段。只有任意数量的空格且无法确定字段归属时，保留采样时间，将该行作为缺失值并在 **解析提示** 中标出位置。
 
 ## 扩展分析器
 
 `charge_analyzer/analyzers.py` 维护分析器名称、菜单标签、图表标题和解析函数。新增解析函数后填入注册表即可复用命令行、Windows 右键入口和离线图表。解析结果由 `folder`、`files`、`columns`、`rows` 和 `warnings` 组成。每行包含以毫秒表示的时间 `time` 和按列顺序排列的 `values`。每列包含名称 `name`、类型 `kind`（`number` 或 `category`）和状态列表 `categories`。
+
+可通过 `source_contents` 字段传递从文件名到已解码原文的映射，用于在源文件列表中展开查看。
