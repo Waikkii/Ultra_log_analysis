@@ -69,7 +69,12 @@ class ParseFolderTests(unittest.TestCase):
         self.assertEqual(result["warnings"], [])
         self.assertEqual(
             result["source_tables"]["charge-log.2"],
-            {"headers": ["Time", "uiSOC", "flags", "status"], "rows": [["2026-11-18 15:37:19", "44", "-0xA", "idle"]]},
+            {
+                "headers": ["Time", "uiSOC", "flags", "status"],
+                "rows": [["2026-11-18 15:37:19", "44", "-0xA", "idle"]],
+                "start": milliseconds + 2000,
+                "end": milliseconds + 2000,
+            },
         )
 
     def test_tab_cells_include_leading_middle_and_trailing_blanks(self):
@@ -172,11 +177,15 @@ class ParseFolderTests(unittest.TestCase):
         self.assertEqual([row["values"] for row in result["rows"]], [[40, "early"], [42, "late"], [43, "latest"]])
         self.assertEqual(result["rows"][1]["time"] - result["rows"][0]["time"], 247)
         self.assertEqual(result["columns"][1]["categories"], ["early", "late", "latest"])
+        table = result["source_tables"]["charge-log.0"]
+        self.assertEqual((table["start"], table["end"]), (result["rows"][0]["time"], result["rows"][1]["time"]))
 
     def test_source_table_collapses_repeated_headers_and_aligns_changed_schema(self):
+        before_header = "2026-07-12 08:14:00 > 31 0x1A"
         malformed = "2026-07-12 08:14:04 > 32 710 extra"
         self.write(
             "charge-log.0",
+            before_header,
             "Time uiSOC flags",
             "2026-07-12 08:14:02 > +031 0x1A",
             "Time uiSOC flags",
@@ -186,19 +195,26 @@ class ParseFolderTests(unittest.TestCase):
             "2026-07-12 08:14:03 > 702 31",
             malformed,
         )
+        self.write("charge-log.1", "Time uiSOC", "2026-07-32 12:00:00 > 80")
 
         result = parse_folder(self.folder)
+        start = int(datetime(2026, 7, 12, 8, 14, 0, tzinfo=timezone.utc).timestamp() * 1000)
 
         self.assertEqual(result["source_tables"]["charge-log.0"], {
             "headers": ["Time", "uiSOC", "flags", "current", "原始内容"],
             "rows": [
+                ["2026-07-12 08:14:00", "", "", "", before_header],
                 ["2026-07-12 08:14:02", "+031", "0x1A", "", ""],
                 ["2026-07-12 08:14:01", "30", "None", "", ""],
                 ["", "", "", "", "unrecognized source content"],
                 ["2026-07-12 08:14:03", "31", "", "702", ""],
                 ["2026-07-12 08:14:04", "", "", "", malformed],
             ],
+            "start": start,
+            "end": start + 4000,
         })
+        self.assertIsNone(result["source_tables"]["charge-log.1"]["start"])
+        self.assertIsNone(result["source_tables"]["charge-log.1"]["end"])
 
     def test_time_gaps_span_files_and_ignore_missing_values_and_duplicate_times(self):
         self.write(

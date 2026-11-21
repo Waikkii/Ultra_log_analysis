@@ -31,10 +31,135 @@
         return column.kind === "category" ? "文字" : "数值";
     }
 
+    function sourceCellWidth(value) {
+        const text = String(value ?? "");
+        if (/^[\x20-\x7e]*$/.test(text)) return text.length;
+        let width = 0;
+        for (const character of text) {
+            width += character === "\t" ? 4 : (character.codePointAt(0) > 127 ? 2 : 1);
+        }
+        return width;
+    }
+
+    function setSourceColumnWidths(table, source) {
+        const widths = source.headers.map(sourceCellWidth);
+        for (const row of source.rows) {
+            for (let index = 0; index < widths.length; index += 1) {
+                widths[index] = Math.max(widths[index], sourceCellWidth(row[index]));
+            }
+        }
+        const columns = element("colgroup");
+        for (const width of widths) {
+            const column = element("col");
+            column.style.width = `calc(${width}ch + 21px)`;
+            columns.append(column);
+        }
+        const width = widths.reduce((total, value) => total + value, 0);
+        table.style.width = `calc(${width}ch + ${widths.length * 21}px)`;
+        table.prepend(columns);
+    }
+
+    function addSourceRow(body, width) {
+        const row = body.insertRow();
+        const cells = [];
+        for (let index = 0; index < width; index += 1) {
+            const cell = element(index === 0 ? "th" : "td");
+            if (index === 0) cell.scope = "row";
+            const text = document.createTextNode("");
+            cell.append(text);
+            row.append(cell);
+            cells.push(text);
+        }
+        return {row, cells};
+    }
+
+    function fillSourceRow(cells, values) {
+        for (let index = 0; index < cells.length; index += 1) {
+            const value = String(values[index] ?? "");
+            if (cells[index].data !== value) cells[index].data = value;
+        }
+    }
+
+    function addSourceSpacer(body, width) {
+        const row = body.insertRow();
+        row.className = "source-spacer";
+        row.setAttribute("aria-hidden", "true");
+        row.insertCell().colSpan = width;
+        return row;
+    }
+
+    function virtualizeSourceRows(content, table, body, source) {
+        const {headers, rows} = source;
+        const style = getComputedStyle(content);
+        const height = Number.parseFloat(style.getPropertyValue("--source-row-height"));
+        const maxHeight = Number.parseFloat(style.getPropertyValue("--source-preview-max-height"));
+        const overscan = 8;
+        const poolSize = Math.min(rows.length, Math.ceil(maxHeight / height) + 1 + 2 * overscan);
+        table.classList.add("is-virtual");
+        table.setAttribute("aria-rowcount", String(rows.length + 1));
+        table.tHead.rows[0].setAttribute("aria-rowindex", "1");
+        setSourceColumnWidths(table, source);
+
+        const top = addSourceSpacer(body, headers.length);
+        const pool = Array.from({length: poolSize}, () => addSourceRow(body, headers.length));
+        const bottom = addSourceSpacer(body, headers.length);
+        let first = -1;
+        let pending = false;
+
+        function setSpacer(row, rowCount) {
+            row.hidden = rowCount === 0;
+            row.style.height = `${rowCount * height}px`;
+        }
+
+        function render() {
+            pending = false;
+            const visibleStart = Math.floor(content.scrollTop / height);
+            const visibleEnd = visibleStart + Math.ceil(content.clientHeight / height);
+            const last = first + poolSize;
+            const comfortablyInside = first >= 0 &&
+                (first === 0 || visibleStart >= first + overscan / 2) &&
+                (last === rows.length || visibleEnd <= last - overscan / 2);
+            if (comfortablyInside) return;
+            const next = Math.min(Math.max(0, visibleStart - overscan), rows.length - poolSize);
+            if (next === first) return;
+            first = next;
+            setSpacer(top, first);
+            for (const [offset, entry] of pool.entries()) {
+                const index = first + offset;
+                entry.row.dataset.row = String(index);
+                entry.row.classList.toggle("is-striped", index % 2 === 1);
+                entry.row.setAttribute("aria-rowindex", String(index + 2));
+                fillSourceRow(entry.cells, rows[index]);
+            }
+            setSpacer(bottom, rows.length - first - poolSize);
+        }
+
+        render();
+        content.addEventListener("scroll", () => {
+            if (!pending) {
+                pending = true;
+                requestAnimationFrame(render);
+            }
+        }, {passive: true});
+    }
+
     function sourceFileEntry(name, tables) {
+        const source = tables?.[name];
         const item = element("li");
         const details = element("details", "source-file");
-        const summary = element("summary", "source-file-name", name);
+        const summary = element("summary", "source-file-name");
+        summary.append(element("span", "source-filename", name));
+        const range = element("span", "source-file-range");
+        if (Number.isFinite(source?.start) && Number.isFinite(source?.end)) {
+            const start = element("time", "", labelTime(source.start, source.start % 1000 !== 0));
+            const end = element("time", "", labelTime(source.end, source.end % 1000 !== 0));
+            start.dateTime = new Date(source.start).toISOString();
+            end.dateTime = new Date(source.end).toISOString();
+            range.append(start, " – ", end);
+        } else {
+            range.textContent = "无有效时间";
+        }
+        summary.append(range);
         const content = element("div", "source-file-content");
         content.tabIndex = 0;
         content.setAttribute("role", "region");
@@ -44,7 +169,6 @@
 
         function populate() {
             if (!details.open) return;
-            const source = tables?.[name];
             if (!source?.rows.length && !source?.headers.length) {
                 content.append(element("p", "list-empty", source ? "文件为空" : "源文件内容不可用"));
             } else {
@@ -57,16 +181,15 @@
                     heading.append(cell);
                 }
                 const body = table.createTBody();
-                for (const values of source.rows) {
-                    const row = body.insertRow();
-                    const time = element("th", "", values[0] ?? "");
-                    time.scope = "row";
-                    row.append(time);
-                    for (let index = 1; index < source.headers.length; index += 1) {
-                        row.append(element("td", "", values[index] ?? ""));
+                content.append(table);
+                if (source.rows.length > 100) {
+                    virtualizeSourceRows(content, table, body, source);
+                } else {
+                    for (const values of source.rows) {
+                        const {cells} = addSourceRow(body, source.headers.length);
+                        fillSourceRow(cells, values);
                     }
                 }
-                content.append(table);
             }
             details.removeEventListener("toggle", populate);
         }

@@ -806,13 +806,27 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.source-file-range {
+  margin-inline-start: 14px;
+  color: var(--muted);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.source-file-range time {
+  white-space: nowrap;
+}
+
 .source-file-name:hover {
   color: var(--blue);
 }
 
 .source-file-content {
-  max-height: min(420px, 50vh);
+  --source-preview-max-height: 420px;
+  --source-row-height: 29px;
+  max-height: min(var(--source-preview-max-height), 50vh);
   overflow: auto;
+  overflow-anchor: none;
   border-top: 1px solid var(--border);
   border-radius: 0 0 7px 7px;
   background: var(--surface);
@@ -845,7 +859,7 @@ h2 {
   background: #eaf0fa;
 }
 
-.source-table :is(thead, tbody) tr > :first-child {
+.source-table tr:not(.source-spacer) > :first-child {
   position: sticky;
   inset-inline-start: 0;
   border-inline-end-color: #bfd0e4;
@@ -856,15 +870,30 @@ h2 {
   background: #e2ecf9;
 }
 
-.source-table tbody tr > :first-child {
+.source-table tbody tr:not(.source-spacer) > :first-child {
   z-index: 1;
   color: #263d5f;
   background: #f0f5fc;
   font-weight: 550;
 }
 
-.source-table tbody tr:nth-child(even) td {
+.source-table:not(.is-virtual) tbody tr:nth-child(even) td,
+.source-table tbody tr.is-striped td {
   background: #f8fafc;
+}
+
+.source-table.is-virtual {
+  table-layout: fixed;
+}
+
+.source-table.is-virtual tr:not(.source-spacer) > :is(th, td) {
+  height: var(--source-row-height);
+  padding-block: 0;
+}
+
+.source-table .source-spacer td {
+  padding: 0;
+  border: 0;
 }
 
 .source-file-content > p {
@@ -985,5 +1014,10 @@ h2 {
   .chart-frame {
     height: 385px;
     min-height: 320px;
+  }
+
+  .source-file-range {
+    display: block;
+    margin: 4px 0 0;
   }
 }

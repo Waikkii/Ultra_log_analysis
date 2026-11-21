@@ -69,8 +69,16 @@ class _SourceRow:
 class _SourceTable:
     names: dict[str, None] = field(default_factory=dict)
     rows: list[_SourceRow] = field(default_factory=list)
+    start: int | None = None
+    end: int | None = None
 
-    def payload(self) -> dict[str, list]:
+    def record_time(self, time: int) -> None:
+        if self.start is None or time < self.start:
+            self.start = time
+        if self.end is None or time > self.end:
+            self.end = time
+
+    def payload(self) -> dict:
         self.rows.sort(key=lambda row: row.line_number)
         headers = ["Time", *self.names]
         rows = [[row.timestamp, *(row.values.get(name, "") for name in self.names)] for row in self.rows]
@@ -81,7 +89,7 @@ class _SourceTable:
             headers.append(label)
             for values, row in zip(rows, self.rows):
                 values.append(row.raw)
-        return {"headers": headers, "rows": rows}
+        return {"headers": headers, "rows": rows, "start": self.start, "end": self.end}
 
 
 @dataclass
@@ -327,14 +335,15 @@ def parse_folder(path: str | Path) -> dict:
                     warnings.add(f"{source.name}:{number} 无法识别为表头或时间记录，已跳过。")
                     table.rows.append(_SourceRow(number, "", raw=line))
                 continue
-            if section is None:
-                warnings.add(f"{source.name}:{number} 记录出现在首个表头之前，已跳过。")
-                table.rows.append(_SourceRow(number, timestamp[1], raw=line))
-                continue
             try:
                 time = _milliseconds(timestamp[1])
             except ValueError:
                 warnings.add(f"{source.name}:{number} 时间无效，已跳过。")
+                table.rows.append(_SourceRow(number, timestamp[1], raw=line))
+                continue
+            table.record_time(time)
+            if section is None:
+                warnings.add(f"{source.name}:{number} 记录出现在首个表头之前，已跳过。")
                 table.rows.append(_SourceRow(number, timestamp[1], raw=line))
                 continue
             position = _Position(source.name, number, timestamp[1], time)

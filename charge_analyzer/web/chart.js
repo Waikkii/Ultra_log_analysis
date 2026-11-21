@@ -671,8 +671,11 @@
       ctx.setTransform(this.pixelRatio, 0, 0, this.pixelRatio, 0, 0);
 
       if (this.markers.size && this.plot.width > 0 && this.plot.height > 0) {
+        ctx.save();
         ctx.strokeStyle = "#c93543";
         ctx.lineWidth = 1.6;
+        ctx.lineCap = "round";
+        ctx.setLineDash([0.1, 4, 5, 4]);
         ctx.beginPath();
         for (const time of this.markers) {
           if (time < this.start || time > this.end) continue;
@@ -681,6 +684,7 @@
           ctx.lineTo(x, this.plot.bottom);
         }
         ctx.stroke();
+        ctx.restore();
       }
 
       const pointer = this.pointer;
