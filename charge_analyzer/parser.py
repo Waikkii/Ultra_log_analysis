@@ -247,18 +247,20 @@ def _section(line: str) -> _Section:
     return _Section(names, [(word.start(), word.end()) for word in header[1:]], separator)
 
 
-def _read_text(path: Path, warnings: _Warnings) -> str:
+def _read_source(path: Path, warnings: _Warnings) -> tuple[str, int]:
     data = path.read_bytes()
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return data.decode("utf-16")
-    try:
-        return data.decode("utf-8-sig")
-    except UnicodeDecodeError:
+        text = data.decode("utf-16")
+    else:
         try:
-            return data.decode("gb18030")
+            text = data.decode("utf-8-sig")
         except UnicodeDecodeError:
-            warnings.add(f"{path.name} 含无法解码的字符，已用替代字符保留内容。")
-            return data.decode("utf-8-sig", errors="replace")
+            try:
+                text = data.decode("gb18030")
+            except UnicodeDecodeError:
+                warnings.add(f"{path.name} 含无法解码的字符，已用替代字符保留内容。")
+                text = data.decode("utf-8-sig", errors="replace")
+    return text, len(data)
 
 
 def _milliseconds(timestamp: str) -> int:
@@ -310,17 +312,19 @@ def parse_folder(path: str | Path) -> dict:
     sources.sort(key=lambda item: (item[0], item[1].name))
     warnings = _Warnings()
     source_tables: dict[str, _SourceTable] = {}
+    source_sizes: dict[str, int] = {}
     names: dict[str, None] = {}
     records: list[tuple[int, dict[str, str]]] = []
     section = None
     for _, source in sources:
         try:
-            text = _read_text(source, warnings)
+            text, size = _read_source(source, warnings)
         except (OSError, UnicodeError) as error:
             warnings.add(f"{source.name} 读取失败（{error}）。")
             continue
         table = _SourceTable()
         source_tables[source.name] = table
+        source_sizes[source.name] = size
         for number, line in enumerate(text.splitlines(), start=1):
             if _HEADER.match(line):
                 if section is not None:
@@ -382,5 +386,6 @@ def parse_folder(path: str | Path) -> dict:
         "rows": rows,
         "warnings": warnings.all(),
         "source_tables": {name: table.payload() for name, table in source_tables.items()},
+        "source_sizes": source_sizes,
         "gaps": find_gaps(rows),
     }

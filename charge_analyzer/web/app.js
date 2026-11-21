@@ -41,13 +41,19 @@
         return width;
     }
 
-    function setSourceColumnWidths(table, source) {
+    function sourceColumnWidths(source) {
+        if (source.widths) return source.widths;
         const widths = source.headers.map(sourceCellWidth);
         for (const row of source.rows) {
             for (let index = 0; index < widths.length; index += 1) {
                 widths[index] = Math.max(widths[index], sourceCellWidth(row[index]));
             }
         }
+        return widths;
+    }
+
+    function setSourceColumnWidths(table, source) {
+        const widths = sourceColumnWidths(source);
         const columns = element("colgroup");
         for (const width of widths) {
             const column = element("col");
@@ -88,62 +94,172 @@
         return row;
     }
 
-    function virtualizeSourceRows(content, table, body, source) {
-        const {headers, rows} = source;
+    function sourceWindow(source, chunks, first, count) {
+        if (!source.chunk_ids) return source.rows.slice(first, first + count);
+        const {chunk_size: size, chunk_ids: ids} = source;
+        const start = Math.floor(first / size);
+        const end = Math.floor((first + count - 1) / size);
+        for (const index of chunks.keys()) {
+            if (index < start || index > end) chunks.delete(index);
+        }
+        for (let index = start; index <= end; index += 1) {
+            if (!chunks.has(index)) {
+                const payload = byId(`source-chunk-${ids[index]}`);
+                chunks.set(index, JSON.parse(payload.textContent));
+            }
+        }
+        return Array.from({length: count}, (_, offset) => {
+            const row = first + offset;
+            const values = chunks.get(Math.floor(row / size))[row % size];
+            if (!Array.isArray(values)) throw new Error("Invalid source preview row");
+            return values;
+        });
+    }
+
+    function virtualizeSourceRows(content, status, table, body, source, position, isOpen) {
+        const chunked = Boolean(source.chunk_ids);
+        const rowCount = source.row_count ?? source.rows.length;
+        const chunks = new Map();
         const style = getComputedStyle(content);
         const height = Number.parseFloat(style.getPropertyValue("--source-row-height"));
         const maxHeight = Number.parseFloat(style.getPropertyValue("--source-preview-max-height"));
-        const overscan = 8;
-        const poolSize = Math.min(rows.length, Math.ceil(maxHeight / height) + 1 + 2 * overscan);
+        const overscan = chunked ? 4 : 8;
+        const poolSize = Math.min(rowCount, Math.ceil(maxHeight / height) + 1 + 2 * overscan);
         table.classList.add("is-virtual");
-        table.setAttribute("aria-rowcount", String(rows.length + 1));
+        table.setAttribute("aria-rowcount", String(rowCount + 1));
         table.tHead.rows[0].setAttribute("aria-rowindex", "1");
         setSourceColumnWidths(table, source);
 
-        const top = addSourceSpacer(body, headers.length);
-        const pool = Array.from({length: poolSize}, () => addSourceRow(body, headers.length));
-        const bottom = addSourceSpacer(body, headers.length);
+        const top = addSourceSpacer(body, source.headers.length);
+        const pool = Array.from({length: poolSize}, () => addSourceRow(body, source.headers.length));
+        const bottom = addSourceSpacer(body, source.headers.length);
         let first = -1;
-        let pending = false;
+        let displayed = 0;
+        let frame = 0;
+        let timer = 0;
 
         function setSpacer(row, rowCount) {
             row.hidden = rowCount === 0;
             row.style.height = `${rowCount * height}px`;
         }
 
+        function setStatus(message, busy = false) {
+            if (status.textContent === message) return;
+            status.textContent = message;
+            status.hidden = !message;
+            content.setAttribute("aria-busy", String(busy));
+            table.classList.toggle("is-pending", Boolean(message));
+        }
+
+        function visibleRows() {
+            const scroll = content.scrollTop;
+            const start = Math.max(0, Math.min(rowCount - 1, Math.floor(scroll / height)));
+            const end = Math.min(rowCount, Math.max(start + 1, Math.ceil((scroll + content.clientHeight) / height) - 1));
+            return {start, end};
+        }
+
         function render() {
-            pending = false;
-            const visibleStart = Math.floor(content.scrollTop / height);
-            const visibleEnd = visibleStart + Math.ceil(content.clientHeight / height);
-            const last = first + poolSize;
-            const comfortablyInside = first >= 0 &&
-                (first === 0 || visibleStart >= first + overscan / 2) &&
-                (last === rows.length || visibleEnd <= last - overscan / 2);
-            if (comfortablyInside) return;
-            const next = Math.min(Math.max(0, visibleStart - overscan), rows.length - poolSize);
-            if (next === first) return;
+            frame = 0;
+            timer = 0;
+            if (!isOpen()) return;
+            const {start, end} = visibleRows();
+            const last = first + displayed;
+            if (!chunked && first >= 0 &&
+                (first === 0 || start >= first + overscan / 2) &&
+                (last === rowCount || end <= last - overscan / 2)) return;
+            let next = Math.min(Math.max(0, start - overscan), rowCount - poolSize);
+            let count = poolSize;
+            if (chunked) {
+                // Buffer nearby rows only within chunks the visible window needs.
+                const {chunk_size: size} = source;
+                next = Math.max(start - overscan, Math.floor(start / size) * size);
+                const after = Math.min(end + overscan, Math.ceil(end / size) * size, rowCount);
+                count = after - next;
+            }
+            if (next === first && count === displayed) {
+                setStatus("");
+                return;
+            }
+            let values;
+            try {
+                values = sourceWindow(source, chunks, next, count);
+            } catch {
+                setStatus("无法读取当前行");
+                return;
+            }
             first = next;
+            displayed = count;
             setSpacer(top, first);
             for (const [offset, entry] of pool.entries()) {
+                entry.row.hidden = offset >= count;
+                if (entry.row.hidden) {
+                    entry.row.removeAttribute("data-row");
+                    fillSourceRow(entry.cells, []);
+                    continue;
+                }
                 const index = first + offset;
                 entry.row.dataset.row = String(index);
                 entry.row.classList.toggle("is-striped", index % 2 === 1);
                 entry.row.setAttribute("aria-rowindex", String(index + 2));
-                fillSourceRow(entry.cells, rows[index]);
+                fillSourceRow(entry.cells, values[offset]);
             }
-            setSpacer(bottom, rows.length - first - poolSize);
+            setSpacer(bottom, rowCount - first - displayed);
+            setStatus("");
         }
 
-        render();
-        content.addEventListener("scroll", () => {
-            if (!pending) {
-                pending = true;
-                requestAnimationFrame(render);
+        setSpacer(top, 0);
+        setSpacer(bottom, rowCount);
+        for (const {row} of pool) row.hidden = true;
+        content.scrollTop = position.top;
+        content.scrollLeft = position.left;
+        let lastTop = content.scrollTop;
+        let viewportHeight = content.clientHeight;
+
+        function queueFrame() {
+            if (!frame) frame = requestAnimationFrame(render);
+        }
+
+        function scroll() {
+            if (!isOpen() || lastTop === content.scrollTop) return;
+            lastTop = content.scrollTop;
+            if (chunked) {
+                cancelAnimationFrame(frame);
+                frame = 0;
+                clearTimeout(timer);
+                timer = 0;
+                const {start, end} = visibleRows();
+                if (start >= first && end <= first + displayed) {
+                    setStatus("");
+                } else {
+                    setStatus("正在加载当前行…", true);
+                    timer = window.setTimeout(render, 80);
+                }
+            } else {
+                queueFrame();
             }
-        }, {passive: true});
+        }
+
+        const observer = chunked ? new ResizeObserver(() => {
+            if (!isOpen() || viewportHeight === content.clientHeight) return;
+            viewportHeight = content.clientHeight;
+            if (!timer) queueFrame();
+        }) : null;
+        observer?.observe(content);
+        content.addEventListener("scroll", scroll, {passive: true});
+        if (chunked) setStatus("正在加载当前行…", true);
+        queueFrame();
+
+        return () => {
+            observer?.disconnect();
+            content.removeEventListener("scroll", scroll);
+            cancelAnimationFrame(frame);
+            clearTimeout(timer);
+            chunks.clear();
+            setStatus("");
+        };
     }
 
-    function sourceFileEntry(name, tables) {
+    function sourceFileEntry(name, tables, section) {
         const source = tables?.[name];
         const item = element("li");
         const details = element("details", "source-file");
@@ -164,12 +280,27 @@
         content.tabIndex = 0;
         content.setAttribute("role", "region");
         content.setAttribute("aria-label", `${name} 原始内容`);
-        details.append(summary, content);
+        const status = element("p", "source-preview-status");
+        status.setAttribute("role", "status");
+        status.hidden = true;
+        const preview = element("div", "source-preview");
+        preview.append(content, status);
+        details.append(summary, preview);
         item.append(details);
 
+        const position = {top: 0, left: 0};
+        const isOpen = () => details.open && section.open;
+        let dispose;
+        content.addEventListener("scroll", () => {
+            if (isOpen()) {
+                position.top = content.scrollTop;
+                position.left = content.scrollLeft;
+            }
+        }, {passive: true});
+
         function populate() {
-            if (!details.open) return;
-            if (!source?.rows.length && !source?.headers.length) {
+            const rowCount = source?.row_count ?? source?.rows?.length ?? 0;
+            if (!rowCount && !source?.headers.length) {
                 content.append(element("p", "list-empty", source ? "文件为空" : "源文件内容不可用"));
             } else {
                 const table = element("table", "source-table");
@@ -182,20 +313,31 @@
                 }
                 const body = table.createTBody();
                 content.append(table);
-                if (source.rows.length > 100) {
-                    virtualizeSourceRows(content, table, body, source);
+                if (source.chunk_ids || rowCount > 100) {
+                    dispose = virtualizeSourceRows(content, status, table, body, source, position, isOpen);
                 } else {
                     for (const values of source.rows) {
                         const {cells} = addSourceRow(body, source.headers.length);
                         fillSourceRow(cells, values);
                     }
+                    content.scrollTop = position.top;
+                    content.scrollLeft = position.left;
                 }
             }
-            details.removeEventListener("toggle", populate);
         }
 
-        details.addEventListener("toggle", populate);
-        return item;
+        function sync() {
+            if (isOpen()) {
+                if (!content.firstChild) populate();
+            } else if (content.firstChild) {
+                dispose?.();
+                dispose = undefined;
+                content.replaceChildren();
+            }
+        }
+
+        details.addEventListener("toggle", sync);
+        return {item, sync};
     }
 
     function initialize(data) {
@@ -253,8 +395,13 @@
                 ? `${start} – ${end.slice(11)}`
                 : `${start} – ${end}`;
         }
-        byId("files").hidden = data.files.length === 0;
-        byId("files-list").replaceChildren(...data.files.map(name => sourceFileEntry(name, data.source_tables)));
+        const sourceSection = byId("files");
+        sourceSection.hidden = data.files.length === 0;
+        const entries = data.files.map(name => sourceFileEntry(name, data.source_tables, sourceSection));
+        byId("files-list").replaceChildren(...entries.map(entry => entry.item));
+        sourceSection.addEventListener("toggle", () => {
+            for (const {sync} of entries) sync();
+        });
         byId("warnings").hidden = warnings.length === 0;
         byId("warning-count").textContent = integerFormat.format(warnings.length);
         byId("warning-list").replaceChildren(...warnings.map(warning => element("li", "", warning)));
