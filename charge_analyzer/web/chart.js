@@ -707,9 +707,11 @@
         ctx.setLineDash([]);
       }
 
+      const positions = new Map();
       for (const series of this.series) {
         const y = this.y(series.index, row.values[series.index]);
         if (y === null) continue;
+        positions.set(series.index, y);
         ctx.fillStyle = "#fff";
         ctx.strokeStyle = series.color;
         ctx.lineWidth = 1.8;
@@ -719,7 +721,7 @@
         ctx.stroke();
       }
       this.hoverRow = row;
-      this.onHover?.({ row, x, y: pointer.y });
+      this.onHover?.({ row, x, y: pointer.y, positions });
     }
   }
 

@@ -413,7 +413,7 @@
         const tooltip = byId("chart-tooltip");
         const markersEmpty = byId("markers-empty");
         const markersList = byId("markers-list");
-        const markerNotes = new Map();
+        const markers = new Map();
 
         const folderParts = data.folder.split(/[\\/]+/).filter(Boolean);
         const folderName = folderParts.at(-1) ?? data.folder;
@@ -503,7 +503,13 @@
                 return;
             }
             const time = element("div", "tooltip-time", labelTime(info.row.time, info.row.time % 1000 !== 0));
-            const values = visibleSeries.map(column => {
+            const pointY = column => info.positions.get(column.index) ?? Infinity;
+            const tooltipOrder = [...visibleSeries].sort((left, right) => {
+                const leftY = pointY(left);
+                const rightY = pointY(right);
+                return leftY === rightY ? left.index - right.index : leftY - rightY;
+            });
+            const values = tooltipOrder.map(column => {
                 const value = info.row.values[column.index];
                 const row = element("div", "tooltip-row");
                 row.append(
@@ -541,6 +547,7 @@
 
         function refreshChart() {
             visibleSeries = columns.filter(column => selected.has(column.index));
+            for (const marker of markers.values()) renderMarkerValues(marker);
             tooltip.hidden = true;
             byId("selection-count").textContent = `已选 ${integerFormat.format(visibleSeries.length)} 列`;
             byId("clear-selection").disabled = !visibleSeries.length;
@@ -563,14 +570,28 @@
         }
 
         function syncMarkers() {
-            markersEmpty.hidden = markerNotes.size > 0;
-            chart.setMarkers([...markerNotes.keys()]);
+            markersEmpty.hidden = markers.size > 0;
+            chart.setMarkers([...markers.keys()]);
+        }
+
+        function renderMarkerValues({row, values}) {
+            values.replaceChildren(...visibleSeries.map(column => {
+                const value = row.values[column.index];
+                const valueLabel = element("span", "marker-value");
+                valueLabel.append(
+                    swatch("legend-swatch", column.color),
+                    element("span", "marker-column", column.name),
+                    element("span", "marker-reading", value == null ? "—" : String(value)),
+                );
+                return valueLabel;
+            }));
+            values.hidden = !visibleSeries.length;
         }
 
         function addMarker(row) {
-            const existing = markerNotes.get(row.time);
+            const existing = markers.get(row.time);
             if (existing) {
-                existing.focus({preventScroll: true});
+                existing.note.focus({preventScroll: true});
                 return;
             }
 
@@ -586,24 +607,16 @@
             note.placeholder = "添加备注";
             note.setAttribute("aria-label", `${timeLabel} 的备注`);
             const values = element("div", "marker-values");
-            for (const column of visibleSeries) {
-                const value = row.values[column.index];
-                const valueLabel = element("span", "marker-value");
-                valueLabel.append(
-                    swatch("legend-swatch", column.color),
-                    element("span", "marker-column", column.name),
-                    element("span", "marker-reading", value == null ? "—" : String(value)),
-                );
-                values.append(valueLabel);
-            }
+            const marker = {row, note, values};
+            renderMarkerValues(marker);
             remove.addEventListener("click", () => {
-                markerNotes.delete(row.time);
+                markers.delete(row.time);
                 item.remove();
                 syncMarkers();
             });
             item.append(remove, time, note, values);
             markersList.prepend(item);
-            markerNotes.set(row.time, note);
+            markers.set(row.time, marker);
             syncMarkers();
             note.focus({preventScroll: true});
         }
