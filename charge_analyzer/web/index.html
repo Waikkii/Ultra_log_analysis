@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>充电日志分析</title>
+  <style>/*__STYLES__*/</style>
+</head>
+<body>
+  <header class="page-header">
+    <div class="header-content">
+      <div class="identity">
+        <span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+        <div>
+          <p id="analyzer-name" class="log-type">charge-log</p>
+          <h1 id="app-title">充电日志分析</h1>
+        </div>
+      </div>
+      <div class="source-folder">
+        <span class="folder-icon" aria-hidden="true"></span>
+        <div>
+          <span class="source-label">日志文件夹</span>
+          <strong id="folder-name">正在读取</strong>
+          <span id="folder-path" class="folder-path"></span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="page-content">
+    <p id="app-error" class="app-error" role="alert" hidden></p>
+
+    <section class="log-summary" aria-label="日志概况">
+      <div class="summary-item">
+        <span class="summary-label">日志文件</span>
+        <strong id="file-count" class="summary-value">—</strong>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">数据记录</span>
+        <strong id="row-count" class="summary-value">—</strong>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">可选列</span>
+        <strong id="column-count" class="summary-value">—</strong>
+      </div>
+      <div class="summary-item summary-item-range">
+        <span class="summary-label">时间范围</span>
+        <strong id="time-range" class="summary-value time-range">—</strong>
+      </div>
+    </section>
+
+    <div class="analysis-layout">
+      <aside class="surface series-panel" aria-labelledby="series-title">
+        <div class="series-controls">
+          <div class="series-heading">
+            <h2 id="series-title">数据列</h2>
+            <span id="selection-count" class="selection-count" aria-live="polite">已选 0 列</span>
+          </div>
+          <label class="search-box">
+            <span class="search-icon" aria-hidden="true"></span>
+            <input id="column-search" type="search" aria-label="搜索列名" placeholder="搜索列名" autocomplete="off">
+          </label>
+          <div class="filter-row" role="group" aria-label="按列类型筛选">
+            <button class="filter-option" type="button" data-filter="all" aria-pressed="true">全部</button>
+            <button class="filter-option" type="button" data-filter="number" aria-pressed="false">数值</button>
+            <button class="filter-option" type="button" data-filter="category" aria-pressed="false">文字</button>
+          </div>
+        </div>
+        <div id="column-list" class="column-list" role="group" aria-label="选择显示的数据列"></div>
+        <div class="series-footer">
+          <button id="group-open" class="button button-group" type="button" aria-haspopup="dialog"><span class="axis-icon" aria-hidden="true"></span>共用纵轴</button>
+          <button id="clear-selection" class="button button-quiet" type="button">清空</button>
+        </div>
+      </aside>
+
+      <section class="surface chart-panel" aria-labelledby="chart-title">
+        <div class="chart-heading">
+          <div>
+            <h2 id="chart-title">时间趋势</h2>
+            <span id="chart-selection-label" class="chart-selection-label"></span>
+          </div>
+          <div class="chart-toolbar" role="group" aria-label="调整显示时间范围">
+            <button id="zoom-out" class="button zoom-button" type="button" aria-label="缩小" title="缩小">−</button>
+            <button id="zoom-in" class="button zoom-button" type="button" aria-label="放大" title="放大">+</button>
+            <button id="zoom-reset" class="button zoom-reset" type="button">全时段</button>
+          </div>
+        </div>
+        <div id="chart-frame" class="chart-frame">
+          <canvas id="chart-canvas" tabindex="0" aria-label="所选数据列随时间变化的折线图"></canvas>
+          <div id="chart-empty" class="chart-empty" hidden>
+            <span class="empty-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+            <strong>选择要展示的数据列</strong>
+            <p>可以同时勾选多列进行比较。</p>
+          </div>
+          <div id="chart-tooltip" class="chart-tooltip" hidden></div>
+        </div>
+        <div class="chart-footer">
+          <div id="chart-legend" class="chart-legend" aria-label="图例"></div>
+          <p id="chart-status" class="chart-status" aria-live="polite">滚轮缩放，拖动平移</p>
+        </div>
+      </section>
+    </div>
+
+    <div class="log-details">
+      <details id="files" class="source-details" hidden>
+        <summary>源文件</summary>
+        <ul id="files-list" class="files-list"></ul>
+      </details>
+      <details id="warnings" class="source-details warning-details" hidden>
+        <summary>解析提示 <span id="warning-count"></span></summary>
+        <ul id="warning-list" class="warning-list"></ul>
+      </details>
+    </div>
+  </main>
+
+  <dialog id="group-dialog" class="group-dialog" aria-labelledby="group-title">
+    <div class="dialog-heading">
+      <div>
+        <h2 id="group-title">共用纵轴</h2>
+        <p>同组数值列使用相同的范围，同组文字列使用相同的状态刻度。</p>
+      </div>
+      <button id="group-close" class="button close-button" type="button" aria-label="关闭" title="关闭">×</button>
+    </div>
+    <div id="group-list" class="group-list" aria-label="已保存的分组"></div>
+    <form id="group-form" class="group-form">
+      <label class="group-name-label" for="group-name">分组名称</label>
+      <input id="group-name" class="text-input" type="text" placeholder="例如：充电电压" autocomplete="off" maxlength="60">
+      <fieldset class="group-fieldset">
+        <legend>选择组内列</legend>
+        <div id="group-columns" class="group-columns"></div>
+      </fieldset>
+      <p id="group-error" class="group-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button id="group-save" class="button button-primary" type="submit">保存分组</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="application/json" id="log-data">__LOG_DATA__</script>
+  <script>/*__CHART_JS__*/</script>
+  <script>/*__APP_JS__*/</script>
+</body>
+</html>
