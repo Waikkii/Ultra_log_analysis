@@ -38,7 +38,11 @@ py main.py analyze charge-log examples/charge-demo
 py main.py analyze charge-log "D:\logs\phone capture"
 ```
 
-报告包含用于绘图的数据和源日志表格，默认保存在本机临时目录。要把报告保存在指定位置，使用 `--output`。加上 `--no-open` 可仅生成报告，之后双击 HTML 文件即可离线使用。分享报告时，请按源日志的敏感程度处理。
+## 保存离线报告
+
+右键菜单和命令行默认将报告保存为 `charge-log.html`，与 `charge-log.0` 等源文件放在同一日志文件夹。再次解析同一文件夹会覆盖同名报告。
+
+报告包含用于绘图的数据和源日志表格。要把报告保存在指定位置，使用 `--output`。加上 `--no-open` 可仅生成报告，之后双击 HTML 文件即可离线使用。分享报告时，请按源日志的敏感程度处理。
 
 ```powershell
 py main.py analyze charge-log examples/charge-demo --output demo.html --no-open
@@ -73,7 +77,7 @@ py main.py analyze charge-log examples/charge-demo --output demo.html --no-open
 ## 常见问题
 
 - **看不到右键菜单。** 确认安装命令提示成功，并右键点击日志文件夹本身。Windows 11 上还需打开 **显示更多选项**。若已经移动项目，重新安装一次右键菜单。
-- **分析完成后浏览器没有打开。** 在项目目录运行命令行示例，复制终端打印的 HTML 路径，在资源管理器里打开该文件。
+- **分析完成后浏览器没有打开。** 在资源管理器中打开日志文件夹内的 `charge-log.html`。通过命令行运行时，也可以复制终端打印的报告路径来打开。
 - **图表没有数据，或曲线中间断开。** 确认 `charge-log.0` 等文件直接位于所选文件夹内。若页面出现 **解析提示**，可展开查看具体文件和行号。空字段和 `None` 对应的时间点会留空。
 
 ## 日志格式

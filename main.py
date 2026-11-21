@@ -29,7 +29,7 @@ def arguments(argv: list[str] | None) -> argparse.Namespace:
     analyze = commands.add_parser("analyze", help="分析文件夹并打开交互图表")
     analyze.add_argument("analyzer", choices=ANALYZERS)
     analyze.add_argument("folder", type=Path)
-    analyze.add_argument("--output", type=Path, help="将离线 HTML 保存到指定路径")
+    analyze.add_argument("--output", type=Path, help="将离线 HTML 保存到指定路径（默认写入日志文件夹）")
     analyze.add_argument("--no-open", action="store_true", help="生成图表后不打开浏览器")
     commands.add_parser("install-context-menu", help="安装 Windows 文件夹右键菜单")
     commands.add_parser("uninstall-context-menu", help="移除 Windows 文件夹右键菜单")
@@ -53,11 +53,16 @@ def analyze(args: argparse.Namespace) -> int:
         data["gaps"] = find_gaps(data["rows"], expected_interval_ms=expected_interval * 1000)
     data.update(analyzer=args.analyzer, title=analyzer.title, view_config=config)
     report = render_report(data)
-    if args.output is not None:
-        output = args.output.resolve()
-    else:
-        output = Path(tempfile.mkdtemp(prefix="log-analyzer-")) / f"{args.analyzer}.html"
-    output.write_text(report, encoding="utf-8")
+    output = args.output.resolve() if args.output is not None else folder / f"{args.analyzer}.html"
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output.parent, delete=False) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(report)
+        temporary_path.replace(output)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
     if sys.stdout is not None:
         print(output)
