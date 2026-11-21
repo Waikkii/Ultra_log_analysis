@@ -292,7 +292,7 @@
         const isOpen = () => details.open && section.open;
         let dispose;
         content.addEventListener("scroll", () => {
-            if (isOpen()) {
+            if (isOpen() && content.firstElementChild && content.clientHeight > 0) {
                 position.top = content.scrollTop;
                 position.left = content.scrollLeft;
             }
