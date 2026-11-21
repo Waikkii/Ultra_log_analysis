@@ -23,6 +23,16 @@ def show_message(message: str) -> None:
         ctypes.windll.user32.MessageBoxW(None, message, "日志分析", 0x40)
 
 
+def open_report(path: Path) -> bool:
+    try:
+        if os.name == "nt":
+            os.startfile(str(path))
+            return True
+        return webbrowser.open(path.as_uri(), new=1)
+    except OSError:
+        return False
+
+
 def arguments(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="本地日志分析")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -66,7 +76,7 @@ def analyze(args: argparse.Namespace) -> int:
 
     if sys.stdout is not None:
         print(output)
-    if not args.no_open and not webbrowser.open(output.as_uri(), new=1):
+    if not args.no_open and not open_report(output):
         show_message(f"请在浏览器打开图表文件：\n{output}")
     return 0
 
